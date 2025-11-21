@@ -1,7 +1,7 @@
 import requests
 import json
 
-url = "https://tds-quiz-bot.onrender.com/quiz"
+url = "https://project-2-owij.onrender.com/quiz"
 
 payload = {
     "email": "22f1001439@ds.study.iitm.ac.in",

@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 import time
-from quiz_solver import fetch_page_text   # <-- WE WILL NOW USE THIS
+from quiz_solver import solve_full_quiz
 
 app = Flask(__name__)
 
@@ -40,32 +40,35 @@ def quiz():
         return jsonify({"error": "Forbidden: invalid secret"}), 403
 
     # ================================
-    # START QUIZ PROCESSING
+    # START QUIZ PROCESSING  
     # ================================
 
     start_time = time.time()
     quiz_url = data["url"]
+    email = data["email"]
 
-    # Fetch rendered page text using Playwright
+    # Solve the complete quiz chain
     try:
-        page_text = fetch_page_text(quiz_url)
+        quiz_results = solve_full_quiz(quiz_url, email, EXPECTED_SECRET)
+        
+        return jsonify({
+            "status": "completed",
+            "message": "Quiz solving completed",
+            "email": email,
+            "url": quiz_url,
+            "received_at": start_time,
+            "processing_time": time.time() - start_time,
+            "results": quiz_results
+        }), 200
+        
     except Exception as e:
         return jsonify({
-            "error": "Failed to load quiz page",
-            "details": str(e)
+            "error": "Failed to solve quiz",
+            "details": str(e),
+            "email": email,
+            "url": quiz_url,
+            "received_at": start_time
         }), 500
-
-    # Only show a preview for now
-    preview = page_text[:1000]  # first 1000 chars so output is not too large
-
-    return jsonify({
-        "status": "ok",
-        "message": "Quiz page fetched successfully (solver not implemented yet).",
-        "email": data["email"],
-        "url": quiz_url,
-        "received_at": start_time,
-        "page_text_preview": preview
-    }), 200
 
 
 if __name__ == "__main__":
