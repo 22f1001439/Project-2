@@ -51,7 +51,6 @@ def quiz():
         "received_at": start_time
     }), 200
 
-
 if __name__ == "__main__":
     # Debug server for local testing
     app.run(host="0.0.0.0", port=5000, debug=True)
