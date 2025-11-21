@@ -15,7 +15,7 @@ AIPIPE_API_URL = "https://api.aipipe.ai/v1/chat/completions"
 def fetch_page_text(url: str, wait_ms: int = 2000) -> str:
     """Fetch the rendered text content of a page using Playwright"""
     with sync_playwright() as p:
-        browser = p.firefox.launch(headless=True)  # Use firefox instead of Firefox
+        browser = p.firefox.launch(headless=True)  # Use firefox instead of Firefoxpy
         page = browser.new_page()
 
         page.goto(url, wait_until="networkidle")
@@ -197,6 +197,15 @@ def download_and_analyze_data(data_url: str) -> Dict[str, Any]:
 
 def submit_answer(submit_url: str, email: str, secret: str, quiz_url: str, answer: Any) -> Dict[str, Any]:
     """Submit answer to the quiz endpoint"""
+    print(f"DEBUG submit_answer: submit_url='{submit_url}', email='{email}', quiz_url='{quiz_url}', answer={answer}")
+    
+    # Validate submit_url is not empty
+    if not submit_url or not submit_url.strip():
+        return {
+            'status_code': 0,
+            'response': {'error': f'Submit URL is empty or invalid: "{submit_url}"'}
+        }
+    
     payload = {
         "email": email,
         "secret": secret, 
@@ -205,12 +214,14 @@ def submit_answer(submit_url: str, email: str, secret: str, quiz_url: str, answe
     }
     
     try:
+        print(f"DEBUG: Posting to {submit_url} with payload: {payload}")
         response = requests.post(submit_url, json=payload, timeout=30)
         return {
             'status_code': response.status_code,
             'response': response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
         }
     except Exception as e:
+        print(f"DEBUG: Exception in submit_answer: {e}")
         return {
             'status_code': 0,
             'response': {'error': str(e)}
