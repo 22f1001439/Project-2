@@ -5,8 +5,8 @@ def simple_test():
     try:
         with sync_playwright() as p:
             print(f"Available browsers: {list(p.__dict__.keys())}")
-            browser = p.chromium.launch(headless=True)
-            print("✅ Chromium launched successfully")
+            browser = p.firefox.launch(headless=True)
+            print("✅ Firefox launched successfully")
             page = browser.new_page()
             page.goto("https://httpbin.org/json")
             content = page.content()
