@@ -1,7 +1,8 @@
 import requests
 import json
 
-url = "https://project-2-owij.onrender.com/quiz"
+url = "https://project-2-st54.onrender.com/quiz"
+
 
 payload = {
     "email": "22f1001439@ds.study.iitm.ac.in",
@@ -11,4 +12,9 @@ payload = {
 
 resp = requests.post(url, json=payload)
 print(resp.status_code)
-print(json.dumps(resp.json(), indent=2))
+
+try:
+    print(json.dumps(resp.json(), indent=2))
+except json.JSONDecodeError:
+    print("Response is not JSON:")
+    print(resp.text)

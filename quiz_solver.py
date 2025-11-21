@@ -15,7 +15,7 @@ AIPIPE_API_URL = "https://api.aipipe.ai/v1/chat/completions"
 def fetch_page_text(url: str, wait_ms: int = 2000) -> str:
     """Fetch the rendered text content of a page using Playwright."""
     with sync_playwright() as p:
-        # Use whichever browser you installed on Render: firefox or chromium
+        # Use Firefox browser exclusively
         browser = p.firefox.launch(headless=True)
         page = browser.new_page()
 
@@ -45,10 +45,20 @@ def extract_instructions_from_page(page_text: str) -> Dict[str, Any]:
         # Hard fallback – demo always uses this
         instructions["submit_url"] = "https://tds-llm-analysis.s-anand.net/submit"
 
-    # --- 2. Extract DATA URL (CSV or JSON if any) ---
-    data_match = re.search(r'https?://[^\s"]+\.(csv|json)', page_text)
-    if data_match:
-        instructions["data_url"] = data_match.group(0)
+    # --- 2. Extract DATA URL (CSV or JSON if any) --- Improved
+    # Try different patterns for data URLs
+    data_patterns = [
+        r'https?://[^\s"]+\.(csv|json)',  # Absolute URLs
+        r'(https?://[^\s"]+)(?=\s*CSV|csv)',  # URL followed by CSV mention
+        r'/[^\s"]*\.csv',  # Relative CSV paths
+        r'/[^\s"]*\.json',  # Relative JSON paths
+    ]
+    
+    for pattern in data_patterns:
+        data_match = re.search(pattern, page_text, re.IGNORECASE)
+        if data_match:
+            instructions["data_url"] = data_match.group(0)
+            break
 
     # --- 3. Extract QUESTION ---
     if "POST this JSON" in page_text:
@@ -70,6 +80,7 @@ def extract_instructions_from_page(page_text: str) -> Dict[str, Any]:
     else:
         instructions["answer_format"] = "string"
 
+    print(f"DEBUG extract_instructions: submit_url='{instructions['submit_url']}', data_url='{instructions['data_url']}', question='{instructions['question'][:100]}...'")
     return instructions
 
 
@@ -83,42 +94,98 @@ def solve_scrape_secret(current_url: str, instructions: Dict[str, Any]) -> Any:
       'Scrape /demo-scrape-data?... Get the secret code from this page...'
     """
     question = instructions.get("question", "")
-    # Find the relative path e.g. /demo-scrape-data?email=...
-    m = re.search(r'/demo-scrape-data[^\s")]*', question)
-    if m:
-        rel = m.group(0)
-        target_url = urljoin(current_url, rel)
-    else:
-        # fallback: just use current URL (unlikely)
-        target_url = current_url
-
+    print(f"DEBUG solve_scrape_secret: question='{question}'")
+    
+    # First, use Playwright to get the rendered content of current page
     try:
-        resp = requests.get(target_url, timeout=30)
-        resp.raise_for_status()
-        text = resp.text
+        with sync_playwright() as p:
+            browser = p.firefox.launch(headless=True)
+            page = browser.new_page()
+            page.goto(current_url, wait_until="networkidle")
+            page.wait_for_timeout(2000)
+            rendered_content = page.inner_text("body")
+            browser.close()
+        
+        print(f"DEBUG solve_scrape_secret: Rendered page content='{rendered_content[:500]}...'")
+        
+        # Find the relative path e.g. /demo-scrape-data?email=...
+        m = re.search(r'/demo-scrape-data[^\s")]*', rendered_content)
+        if m:
+            rel = m.group(0)
+            target_url = urljoin(current_url, rel)
+        else:
+            # Fallback to question text
+            m = re.search(r'/demo-scrape-data[^\s")]*', question)
+            if m:
+                rel = m.group(0)
+                target_url = urljoin(current_url, rel)
+            else:
+                target_url = current_url
 
-        # 1) Try JSON with "secret"
-        try:
-            obj = resp.json()
-            if isinstance(obj, dict) and "secret" in obj:
-                return obj["secret"]
-        except ValueError:
-            pass
+        print(f"DEBUG solve_scrape_secret: target_url='{target_url}'")
 
-        # 2) Look for "secret code: XYZ"
-        m2 = re.search(r'[Ss]ecret[^:]*:\s*([A-Za-z0-9_\-]+)', text)
-        if m2:
-            return m2.group(1)
+        # Now use Playwright to get the data from the target URL
+        with sync_playwright() as p:
+            browser = p.firefox.launch(headless=True)
+            page = browser.new_page()
+            page.goto(target_url, wait_until="networkidle")
+            page.wait_for_timeout(2000)
+            target_content = page.inner_text("body")
+            browser.close()
 
-        # 3) Fallback: first long token
-        tokens = re.findall(r'[A-Za-z0-9_\-]{6,}', text)
-        if tokens:
-            return tokens[0]
+        print(f"DEBUG solve_scrape_secret: Target content='{target_content}'")
 
-    except Exception:
-        pass
+        # Look for secret patterns in the target content
+        patterns = [
+            r'[Ss]ecret[^:]*:\s*([0-9]+)',  # Secret code is 12345
+            r'[Ss]ecret[^:]*is\s*([0-9]+)',  # Secret is 12345
+            r'[Cc]ode[^:]*:\s*([0-9]+)',
+            r'[Cc]ode[^:]*is\s*([0-9]+)',
+            r'[Ss]ecret[^:]*:\s*([A-Za-z0-9_\-]{6,})',
+            r'[Cc]ode[^:]*:\s*([A-Za-z0-9_\-]{6,})',
+            r'([0-9]{4,})',  # Any 4+ digit number
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, target_content, re.IGNORECASE)
+            if matches:
+                # Filter out common words and take first valid match
+                filtered = [m for m in matches if m.lower() not in ['question', 'response', 'document', 'function']]
+                if filtered:
+                    secret = filtered[0]
+                    print(f"DEBUG solve_scrape_secret: Found secret with pattern '{pattern}': '{secret}'")
+                    return secret
 
-    # As last resort
+    except Exception as e:
+        print(f"DEBUG solve_scrape_secret: Playwright error: {e}")
+        
+    # Fallback: try basic requests approach
+    try:
+        m = re.search(r'/demo-scrape-data[^\s")]*', question)
+        if m:
+            rel = m.group(0)
+            target_url = urljoin(current_url, rel)
+            
+            resp = requests.get(target_url, timeout=30)
+            resp.raise_for_status()
+            text = resp.text
+            print(f"DEBUG solve_scrape_secret: Fallback response text='{text[:500]}...'")
+
+            # Try JSON parsing
+            try:
+                obj = resp.json()
+                if isinstance(obj, dict) and "secret" in obj:
+                    secret = obj["secret"]
+                    print(f"DEBUG solve_scrape_secret: Found secret in JSON: '{secret}'")
+                    return secret
+            except ValueError:
+                pass
+
+    except Exception as e:
+        print(f"DEBUG solve_scrape_secret: Fallback error: {e}")
+
+    # Last resort
+    print("DEBUG solve_scrape_secret: Using last resort answer 42")
     return 42
 
 
@@ -128,25 +195,77 @@ def solve_csv_question(current_url: str, page_text: str, instructions: Dict[str,
     Heuristic: sum values in the main numeric column above the cutoff.
     """
     q = instructions.get("question", "")
+    print(f"DEBUG solve_csv_question: question='{q}'")
+    
+    # Get the rendered page content using Playwright for better extraction
+    try:
+        with sync_playwright() as p:
+            browser = p.firefox.launch(headless=True)
+            page = browser.new_page()
+            page.goto(current_url, wait_until="networkidle")
+            page.wait_for_timeout(2000)
+            rendered_content = page.inner_text("body")
+            full_html = page.content()
+            browser.close()
+        
+        print(f"DEBUG solve_csv_question: Rendered content='{rendered_content[:200]}...'")
+        # Use rendered content for extraction instead of page_text
+        page_text = rendered_content
+    except Exception as e:
+        print(f"DEBUG solve_csv_question: Playwright error, using original page_text: {e}")
+    
     cutoff = None
-    m = re.search(r'Cutoff:\s*([0-9]+(?:\.[0-9]+)?)', q)
-    if m:
-        cutoff = float(m.group(1))
+    # Look for cutoff patterns
+    cutoff_patterns = [
+        r'Cutoff:\s*([0-9]+(?:\.[0-9]+)?)',
+        r'cutoff[^0-9]*([0-9]+(?:\.[0-9]+)?)',
+        r'threshold[^0-9]*([0-9]+(?:\.[0-9]+)?)',
+        r'above[^0-9]*([0-9]+(?:\.[0-9]+)?)',
+        r'greater than[^0-9]*([0-9]+(?:\.[0-9]+)?)',
+    ]
+    
+    for pattern in cutoff_patterns:
+        m = re.search(pattern, q, re.IGNORECASE)
+        if m:
+            cutoff = float(m.group(1))
+            print(f"DEBUG solve_csv_question: Found cutoff={cutoff}")
+            break
 
-    # Determine CSV URL
+    # Determine CSV URL - improved detection for relative links
     csv_url = instructions.get("data_url") or None
     if not csv_url:
-        # Look for absolute CSV URL
-        m_abs = re.search(r'https?://[^\s"]+\.csv', page_text)
-        if m_abs:
-            csv_url = m_abs.group(0)
-        else:
-            # Look for relative CSV path
-            m_rel = re.search(r'/[^\s"]+\.csv', page_text)
-            if m_rel:
-                csv_url = urljoin(current_url, m_rel.group(0))
-    elif not csv_url.lower().startswith("http"):
+        # Look for CSV URLs in both rendered content and HTML
+        csv_patterns = [
+            r'https?://[^\s"]+\.csv',  # Absolute CSV URLs
+            r'href="([^"]*\.csv)"',    # Links to CSV files  
+            r'href=\'([^\']*\.csv)\'',  # Single quoted CSV links
+            r'([a-zA-Z0-9\-_]+\.csv)',  # Simple CSV filenames like demo-audio-data.csv
+            r'/[^\s"]*\.csv',  # Relative CSV paths starting with /
+        ]
+        
+        # Check both rendered content and HTML if available
+        search_texts = [page_text]
+        try:
+            if 'full_html' in locals():
+                search_texts.append(full_html)
+        except:
+            pass
+        
+        for pattern in csv_patterns:
+            for search_text in search_texts:
+                matches = re.findall(pattern, search_text, re.IGNORECASE)
+                if matches:
+                    csv_url = matches[0]
+                    print(f"DEBUG solve_csv_question: Found CSV URL with pattern '{pattern}': '{csv_url}'")
+                    break
+            if csv_url:
+                break
+    
+    # Make CSV URL absolute if it's relative
+    if csv_url and not csv_url.lower().startswith("http"):
         csv_url = urljoin(current_url, csv_url)
+
+    print(f"DEBUG solve_csv_question: csv_url='{csv_url}'")
 
     if not csv_url:
         return 42
@@ -158,6 +277,9 @@ def solve_csv_question(current_url: str, page_text: str, instructions: Dict[str,
         if not lines:
             return 42
 
+        print(f"DEBUG solve_csv_question: CSV has {len(lines)} lines")
+        print(f"DEBUG solve_csv_question: First few lines: {lines[:3]}")
+
         import csv as _csv
         reader = _csv.reader(lines)
         rows = list(reader)
@@ -166,8 +288,11 @@ def solve_csv_question(current_url: str, page_text: str, instructions: Dict[str,
 
         header = rows[0]
         data_rows = rows[1:]
+        
+        print(f"DEBUG solve_csv_question: Header: {header}")
+        print(f"DEBUG solve_csv_question: Data rows count: {len(data_rows)}")
 
-        # Find numeric columns
+        # Find numeric columns - improved logic
         numeric_candidates = []
         for idx in range(len(header)):
             vals = []
@@ -179,28 +304,64 @@ def solve_csv_question(current_url: str, page_text: str, instructions: Dict[str,
                 if not val:
                     continue
                 try:
-                    vals.append(float(val))
+                    # Handle various numeric formats
+                    val_clean = val.replace("$", "").replace("%", "")
+                    vals.append(float(val_clean))
                 except ValueError:
                     ok = False
                     break
             if ok and vals:
                 numeric_candidates.append((idx, header[idx].lower(), vals))
+                print(f"DEBUG solve_csv_question: Numeric column '{header[idx]}' has {len(vals)} values, sample: {vals[:5]}")
 
         if not numeric_candidates:
+            print("DEBUG solve_csv_question: No numeric columns found")
             return 42
 
-        # Prefer 'value'/'amount' column if present
+        # Prefer specific column names - improved logic
         chosen_idx = numeric_candidates[0][0]
-        for idx, col_name, _vals in numeric_candidates:
-            if any(key in col_name for key in ["value", "amount", "number"]):
+        chosen_name = numeric_candidates[0][1]
+        max_priority = -1
+        
+        # Priority order for column selection (higher number = higher priority)
+        priority_keywords = {
+            "value": 5, "amount": 4, "number": 3, "price": 3, 
+            "cost": 3, "total": 2, "sum": 2, "val": 1
+        }
+        
+        for idx, col_name, vals in numeric_candidates:
+            current_priority = 0
+            for keyword, priority in priority_keywords.items():
+                if keyword in col_name:
+                    current_priority = max(current_priority, priority)
+            
+            if current_priority > max_priority:
                 chosen_idx = idx
-                break
+                chosen_name = col_name
+                max_priority = current_priority
+                print(f"DEBUG solve_csv_question: Chose column '{header[idx]}' with priority {current_priority}")
+        
+        if max_priority == -1:
+            print(f"DEBUG solve_csv_question: Using default column '{header[chosen_idx]}'")
+        
+        # If still no good choice, prefer columns with more variation in values
+        if max_priority == -1 and len(numeric_candidates) > 1:
+            max_std = 0
+            for idx, col_name, vals in numeric_candidates:
+                if len(vals) > 1:
+                    import statistics
+                    std = statistics.stdev(vals)
+                    if std > max_std:
+                        max_std = std
+                        chosen_idx = idx
+                        print(f"DEBUG solve_csv_question: Chose column '{header[idx]}' based on variation (std={std:.2f})")
 
+        # Extract values from chosen column
         values = []
         for row in data_rows:
             if chosen_idx >= len(row):
                 continue
-            val = row[chosen_idx].strip().replace(",", "")
+            val = row[chosen_idx].strip().replace(",", "").replace("$", "").replace("%", "")
             if not val:
                 continue
             try:
@@ -209,18 +370,35 @@ def solve_csv_question(current_url: str, page_text: str, instructions: Dict[str,
                 continue
 
         if not values:
+            print("DEBUG solve_csv_question: No values extracted")
             return 42
 
+        print(f"DEBUG solve_csv_question: Extracted {len(values)} values from column '{header[chosen_idx]}'")
+        print(f"DEBUG solve_csv_question: Values range: {min(values)} to {max(values)}")
+
+        # Apply cutoff filter and calculate sum
         if cutoff is not None:
-            total = sum(v for v in values if v > cutoff)
+            filtered_values = [v for v in values if v > cutoff]
+            total = sum(filtered_values)
+            print(f"DEBUG solve_csv_question: Cutoff={cutoff}, filtered {len(filtered_values)}/{len(values)} values > cutoff")
+            print(f"DEBUG solve_csv_question: Filtered values: {filtered_values[:10]}...")
         else:
             total = sum(values)
+            print(f"DEBUG solve_csv_question: No cutoff, summing all {len(values)} values")
 
+        print(f"DEBUG solve_csv_question: Total sum = {total}")
+
+        # Return integer if close to whole number
         if abs(total - round(total)) < 1e-6:
-            return int(round(total))
-        return total
+            result = int(round(total))
+            print(f"DEBUG solve_csv_question: Returning integer: {result}")
+            return result
+        else:
+            print(f"DEBUG solve_csv_question: Returning float: {total}")
+            return total
 
-    except Exception:
+    except Exception as e:
+        print(f"DEBUG solve_csv_question: Exception: {e}")
         return 42
 
 
