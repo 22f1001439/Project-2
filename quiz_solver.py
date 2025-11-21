@@ -14,18 +14,41 @@ AIPIPE_API_URL = "https://api.aipipe.ai/v1/chat/completions"
 
 def fetch_page_text(url: str, wait_ms: int = 2000) -> str:
     """Fetch the rendered text content of a page using Playwright."""
-    with sync_playwright() as p:
-        # Use Firefox browser exclusively
-        browser = p.firefox.launch(headless=True)
-        page = browser.new_page()
+    print(f"DEBUG fetch_page_text: url='{url}'")
+    try:
+        with sync_playwright() as p:
+            # Use Firefox browser exclusively with deployment-friendly options
+            browser = p.firefox.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage'
+                ]
+            )
+            page = browser.new_page()
+            
+            # Set reasonable timeouts for deployment environment
+            page.set_default_timeout(30000)  # 30 seconds
+            page.goto(url, wait_until="networkidle", timeout=30000)
+            page.wait_for_timeout(wait_ms)
 
-        page.goto(url, wait_until="networkidle")
-        page.wait_for_timeout(wait_ms)
-
-        text = page.inner_text("body")
-        browser.close()
-
-    return text
+            text = page.inner_text("body")
+            browser.close()
+            print(f"DEBUG fetch_page_text: Successfully fetched {len(text)} characters")
+            return text
+            
+    except Exception as e:
+        print(f"ERROR fetch_page_text: {e}")
+        # Fallback to requests if Playwright fails
+        try:
+            print("DEBUG fetch_page_text: Trying fallback with requests...")
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            print(f"DEBUG fetch_page_text: Fallback successful")
+            return response.text
+        except Exception as fallback_error:
+            print(f"ERROR fetch_page_text: Fallback failed: {fallback_error}")
+            raise e
 
 
 def extract_instructions_from_page(page_text: str) -> Dict[str, Any]:

@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 import time
+import traceback
 from quiz_solver import solve_full_quiz
 
 app = Flask(__name__)
@@ -16,6 +17,25 @@ def home():
             "POST /quiz": "Submit a quiz solving request"
         }
     })
+
+
+@app.route("/health")
+def health():
+    """Health check endpoint for deployment monitoring"""
+    try:
+        # Test if playwright is available
+        from playwright.sync_api import sync_playwright
+        return jsonify({
+            "status": "healthy",
+            "playwright": "available",
+            "timestamp": time.time()
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "unhealthy", 
+            "error": str(e),
+            "timestamp": time.time()
+        }), 500
 
 
 @app.route("/quiz", methods=["POST"])
@@ -49,7 +69,9 @@ def quiz():
 
     # Solve the complete quiz chain
     try:
+        print(f"DEBUG: Starting quiz solving for {email} at {quiz_url}")
         quiz_results = solve_full_quiz(quiz_url, email, EXPECTED_SECRET)
+        print(f"DEBUG: Quiz solving completed successfully")
         
         return jsonify({
             "status": "completed",
@@ -62,9 +84,12 @@ def quiz():
         }), 200
         
     except Exception as e:
+        print(f"ERROR: Quiz solving failed: {e}")
+        print(f"ERROR: Traceback: {traceback.format_exc()}")
         return jsonify({
             "error": "Failed to solve quiz",
             "details": str(e),
+            "type": type(e).__name__,
             "email": email,
             "url": quiz_url,
             "received_at": start_time
