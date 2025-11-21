@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 import time
-
+from quiz_solver import fetch_page_text
 app = Flask(__name__)
 
 EXPECTED_SECRET = "iitm"

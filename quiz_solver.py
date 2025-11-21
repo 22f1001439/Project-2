@@ -1,16 +1,3 @@
-# quiz_solver.py
-#
-# First simple version:
-# - Uses Playwright to load the quiz URL in a headless browser
-# - Returns the visible text from the page body
-#
-# Later we will extend this to:
-# - Understand the question
-# - Download files
-# - Compute the answer
-# - Submit it to the given endpoint
-# - Follow further quiz URLs
-
 from playwright.sync_api import sync_playwright
 
 
