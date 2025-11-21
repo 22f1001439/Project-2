@@ -5,9 +5,5 @@ services:
     plan: free
     buildCommand: |
       pip install -r requirements.txt
-      playwright install --with-deps
+      playwright install --with-deps chromium
     startCommand: gunicorn app:app --timeout 120 --workers 1
-
-buildCommand: |
-  pip install -r requirements.txt
-  playwright install --with-deps
