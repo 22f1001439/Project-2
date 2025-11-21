@@ -9,7 +9,7 @@ from urllib.parse import urljoin, urlparse
 def fetch_page_text(url: str, wait_ms: int = 2000) -> str:
     """Fetch the rendered text content of a page using Playwright"""
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)  # Use Chromium instead of Firefox
+        browser = p.firefox.launch(headless=True)  # Use firefox instead of Firefox
         page = browser.new_page()
 
         page.goto(url, wait_until="networkidle")

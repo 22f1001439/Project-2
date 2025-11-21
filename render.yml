@@ -1,9 +1,8 @@
 services:
   - type: web
-    name: tds-quiz-bot
+    name: project-2
     env: python
-    plan: free
     buildCommand: |
       pip install -r requirements.txt
-      playwright install --with-deps chromium
+      playwright install firefox
     startCommand: gunicorn app:app --timeout 120 --workers 1
