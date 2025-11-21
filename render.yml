@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: project-2
+    name: quiz-solver-project
     env: python
     region: oregon
     plan: starter

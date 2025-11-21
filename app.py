@@ -11,10 +11,12 @@ EXPECTED_SECRET = "iitm"
 @app.route("/")
 def home():
     return jsonify({
-        "message": "Quiz Solver API",
+        "message": "Quiz Solver API - UPDATED",
         "status": "running",
+        "version": "2.0",
         "endpoints": {
-            "POST /quiz": "Submit a quiz solving request"
+            "POST /quiz": "Submit a quiz solving request",
+            "GET /health": "Health check endpoint"
         }
     })
 
